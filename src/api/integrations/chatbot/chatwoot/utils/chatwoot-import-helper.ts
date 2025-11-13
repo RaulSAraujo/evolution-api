@@ -315,7 +315,7 @@ class ChatwootImport {
               const bindmessageTimestamp = `$${bindInsertMsg.length}`;
 
               sqlInsertMsg += `(${bindContent}, ${bindContent}, $1, $2, ${bindConversationId}, ${bindMessageType}, FALSE, 0,
-                  ${bindSenderType},${bindSenderId},${bindSourceId}, to_timestamp(${bindmessageTimestamp}), to_timestamp(${bindmessageTimestamp})),`;
+                  ${bindSenderType},${bindSenderId},${bindSourceId}, (to_timestamp(${bindmessageTimestamp}) AT TIME ZONE 'UTC')::timestamp, (to_timestamp(${bindmessageTimestamp}) AT TIME ZONE 'UTC')::timestamp),`;
             });
           });
           if (bindInsertMsg.length > 2) {
@@ -399,7 +399,7 @@ class ChatwootImport {
               new_contact AS (
                 INSERT INTO contacts (name, phone_number, account_id, identifier, created_at, updated_at)
                 SELECT REPLACE(p.phone_number, '+', ''), p.phone_number, $1, CONCAT(REPLACE(p.phone_number, '+', ''),
-                  '@s.whatsapp.net'), to_timestamp(p.created_at), to_timestamp(p.last_activity_at)
+                  '@s.whatsapp.net'), (to_timestamp(p.created_at) AT TIME ZONE 'UTC')::timestamp, (to_timestamp(p.last_activity_at) AT TIME ZONE 'UTC')::timestamp
                 FROM only_new_phone_number AS p
                 ON CONFLICT(identifier, account_id) DO UPDATE SET updated_at = EXCLUDED.updated_at
                 RETURNING id, phone_number, created_at, updated_at
@@ -570,7 +570,8 @@ class ChatwootImport {
   public updateMessageSourceID(messageId: string | number, sourceId: string) {
     const pgClient = postgresClient.getChatwootConnection();
 
-    const sql = `UPDATE messages SET source_id = $1, status = 0, created_at = NOW(), updated_at = NOW() WHERE id = $2;`;
+    // Use UTC timestamp to match created_at format
+    const sql = `UPDATE messages SET source_id = $1, status = 0, updated_at = (NOW() AT TIME ZONE 'UTC')::timestamp WHERE id = $2;`;
 
     return pgClient.query(sql, [`WAID:${sourceId}`, messageId]);
   }
