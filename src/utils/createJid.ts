@@ -69,3 +69,44 @@ export function createJid(number: string): string {
 
   return `${number}@s.whatsapp.net`;
 }
+
+/**
+ * Valida se um remoteJid é válido para ser salvo no banco de dados
+ * @param remoteJid - O remoteJid a ser validado
+ * @returns true se o remoteJid é válido, false caso contrário
+ */
+export function isValidRemoteJid(remoteJid: string): boolean {
+  if (!remoteJid || typeof remoteJid !== 'string') {
+    return false;
+  }
+
+  // Sempre permitir grupos e LID
+  if (remoteJid.includes('@g.us') || remoteJid.includes('@lid')) {
+    return true;
+  }
+
+  // Filtrar status@broadcast
+  if (remoteJid === 'status@broadcast') {
+    return false;
+  }
+
+  // Para números normais, deve terminar com @s.whatsapp.net
+  if (!remoteJid.endsWith('@s.whatsapp.net')) {
+    return false;
+  }
+
+  const numberPart = remoteJid.split('@')[0];
+
+  // Validar se é apenas números
+  if (!/^\d+$/.test(numberPart)) {
+    return false;
+  }
+
+  // Números válidos do WhatsApp têm entre 10-13 dígitos
+  // Números com 14+ dígitos são provavelmente inválidos (IDs internos, etc)
+  if (numberPart.length < 10 || numberPart.length > 13) {
+    return false;
+  }
+
+  return true;
+}

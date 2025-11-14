@@ -237,10 +237,38 @@ class ChatwootImport {
           remoteJid: string;
         };
 
-        const aMessageTimestamp = a.messageTimestamp as any as number;
-        const bMessageTimestamp = b.messageTimestamp as any as number;
+        // Validate remoteJid exists
+        if (!aKey?.remoteJid || !bKey?.remoteJid) {
+          return 0;
+        }
 
-        return parseInt(aKey.remoteJid) - parseInt(bKey.remoteJid) || aMessageTimestamp - bMessageTimestamp;
+        const aMessageTimestamp = (a.messageTimestamp as any as number) || 0;
+        const bMessageTimestamp = (b.messageTimestamp as any as number) || 0;
+
+        // Para grupos (@g.us) e LID (@lid), ordenar por string completa
+        // Para números normais (@s.whatsapp.net), ordenar numericamente
+        const aIsGroupOrLid = aKey.remoteJid.includes('@g.us') || aKey.remoteJid.includes('@lid');
+        const bIsGroupOrLid = bKey.remoteJid.includes('@g.us') || bKey.remoteJid.includes('@lid');
+
+        // Se ambos são grupos/LID ou ambos são números, usar comparação apropriada
+        if (aIsGroupOrLid && bIsGroupOrLid) {
+          // Ambos são grupos/LID: ordenar por string completa
+          const stringDiff = aKey.remoteJid.localeCompare(bKey.remoteJid);
+          return stringDiff !== 0 ? stringDiff : aMessageTimestamp - bMessageTimestamp;
+        } else if (!aIsGroupOrLid && !bIsGroupOrLid) {
+          // Ambos são números: ordenar numericamente
+          const aNumber = aKey.remoteJid.split('@')[0];
+          const bNumber = bKey.remoteJid.split('@')[0];
+          const aNum = parseInt(aNumber) || 0;
+          const bNum = parseInt(bNumber) || 0;
+          const numberDiff = aNum - bNum;
+          return numberDiff !== 0 ? numberDiff : aMessageTimestamp - bMessageTimestamp;
+        } else {
+          // Um é grupo/LID e outro é número: grupos/LID primeiro, depois números
+          // Ou ordenar por string para manter consistência
+          const stringDiff = aKey.remoteJid.localeCompare(bKey.remoteJid);
+          return stringDiff !== 0 ? stringDiff : aMessageTimestamp - bMessageTimestamp;
+        }
       });
 
       const allMessagesMappedByPhoneNumber = this.createMessagesMapByPhoneNumber(messagesOrdered);
@@ -253,8 +281,12 @@ class ChatwootImport {
         });
       });
 
-      const existingSourceIds = await this.getExistingSourceIds(messagesOrdered.map((message: any) => message.key.id));
-      messagesOrdered = messagesOrdered.filter((message: any) => !existingSourceIds.has(message.key.id));
+      const existingSourceIds = await this.getExistingSourceIds(
+        messagesOrdered.map((message: any) => message.key?.id).filter((id: string) => id != null && id !== ''),
+      );
+      messagesOrdered = messagesOrdered.filter(
+        (message: any) => message.key?.id && !existingSourceIds.has(`WAID:${message.key.id}`),
+      );
       // processing messages in batch
       const batchSize = 4000;
       let messagesChunk: Message[] = this.sliceIntoChunks(messagesOrdered, batchSize);
@@ -281,6 +313,10 @@ class ChatwootImport {
 
             messages.forEach((message) => {
               if (!message.message) {
+                return;
+              }
+
+              if (!message.key?.id) {
                 return;
               }
 

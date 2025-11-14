@@ -22,7 +22,7 @@ import { ChannelStartupService } from '@api/services/channel.service';
 import { Events, wa } from '@api/types/wa.types';
 import { AudioConverter, Chatwoot, ConfigService, Database, Openai, S3, WaBusiness } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException } from '@exceptions';
-import { createJid } from '@utils/createJid';
+import { createJid, isValidRemoteJid } from '@utils/createJid';
 import { status } from '@utils/renderStatus';
 import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
@@ -702,6 +702,12 @@ export class BusinessStartupService extends ChannelStartupService {
           return;
         }
 
+        // Validar remoteJid antes de salvar
+        if (!isValidRemoteJid(contactRaw.remoteJid)) {
+          this.logger.warn(`Invalid remoteJid skipped: ${contactRaw.remoteJid}`);
+          return;
+        }
+
         if (contact) {
           const contactRaw: any = {
             remoteJid: received.contacts[0].profile.phone,
@@ -729,7 +735,7 @@ export class BusinessStartupService extends ChannelStartupService {
 
         this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
 
-        this.prismaRepository.contact.create({
+        await this.prismaRepository.contact.create({
           data: contactRaw,
         });
       }

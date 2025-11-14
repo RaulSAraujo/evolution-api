@@ -80,7 +80,7 @@ import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { Boom } from '@hapi/boom';
 import { createId as cuid } from '@paralleldrive/cuid2';
 import { Instance, Message } from '@prisma/client';
-import { createJid } from '@utils/createJid';
+import { createJid, isValidRemoteJid } from '@utils/createJid';
 import { fetchLatestWaWebVersion } from '@utils/fetchLatestWaWebVersion';
 import { makeProxyAgent, makeProxyAgentUndici } from '@utils/makeProxyAgent';
 import { getOnWhatsappCache, saveOnWhatsappCache } from '@utils/onWhatsappCache';
@@ -256,6 +256,12 @@ export class BaileysStartupService extends ChannelStartupService {
 
   public phoneNumber: string;
 
+  // Reconnection control
+  private isReconnecting = false;
+  private reconnectAttempts = 0;
+  private readonly maxReconnectAttempts = 10;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
+
   public get connectionStatus() {
     return this.stateConnection;
   }
@@ -402,7 +408,19 @@ export class BaileysStartupService extends ChannelStartupService {
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
-        await this.connectToWhatsapp(this.phoneNumber);
+        // Prevenir reconexões múltiplas
+        if (this.isReconnecting) {
+          this.logger.warn('Reconnection already in progress, skipping...');
+          return;
+        }
+
+        // Verificar se já está conectando
+        if (this.stateConnection.state === 'connecting') {
+          this.logger.warn('Connection already in progress, skipping reconnection...');
+          return;
+        }
+
+        this.scheduleReconnect();
       } else {
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
@@ -439,6 +457,14 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'open') {
+      // Resetar contadores de reconexão quando conectar com sucesso
+      this.isReconnecting = false;
+      this.reconnectAttempts = 0;
+      if (this.reconnectTimeout) {
+        clearTimeout(this.reconnectTimeout);
+        this.reconnectTimeout = null;
+      }
+
       this.instance.wuid = this.client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
@@ -492,6 +518,63 @@ export class BaileysStartupService extends ChannelStartupService {
     if (connection === 'connecting') {
       this.sendDataWebhook(Events.CONNECTION_UPDATE, { instance: this.instance.name, ...this.stateConnection });
     }
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.logger.error(
+        `Maximum reconnect attempts (${this.maxReconnectAttempts}) reached. Stopping reconnection attempts.`,
+      );
+      this.isReconnecting = false;
+      this.reconnectAttempts = 0;
+      return;
+    }
+
+    if (this.isReconnecting) {
+      return; // Already scheduled
+    }
+
+    this.isReconnecting = true;
+    this.reconnectAttempts++;
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (max)
+    const delay = Math.min(1000 * Math.pow(2, Math.min(this.reconnectAttempts - 1, 4)), 30000);
+
+    this.logger.info(
+      `Scheduling WhatsApp reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`,
+    );
+
+    // Limpar timeout anterior se existir
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
+
+    this.reconnectTimeout = setTimeout(async () => {
+      try {
+        this.logger.info(
+          `Attempting to reconnect to WhatsApp (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
+        );
+
+        // Atualizar estado antes de reconectar
+        this.stateConnection = { state: 'connecting' };
+
+        await this.connectToWhatsapp(this.phoneNumber);
+
+        this.logger.info('Successfully reconnected to WhatsApp');
+        this.isReconnecting = false;
+        this.reconnectAttempts = 0;
+        this.reconnectTimeout = null;
+      } catch (error) {
+        this.logger.error({
+          local: 'BaileysStartupService.scheduleReconnect',
+          message: `Reconnection attempt ${this.reconnectAttempts} failed`,
+          error: error.message || error,
+        });
+        this.isReconnecting = false;
+        this.reconnectTimeout = null;
+        this.scheduleReconnect(); // Tentar novamente
+      }
+    }, delay);
   }
 
   private async getMessage(key: proto.IMessageKey, full = false) {
@@ -1376,6 +1459,12 @@ export class BaileysStartupService extends ChannelStartupService {
           };
 
           if (contactRaw.remoteJid === 'status@broadcast') {
+            continue;
+          }
+
+          // Validar remoteJid antes de salvar
+          if (!isValidRemoteJid(contactRaw.remoteJid)) {
+            this.logger.warn(`Invalid remoteJid skipped: ${contactRaw.remoteJid}`);
             continue;
           }
 

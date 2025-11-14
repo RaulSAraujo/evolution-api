@@ -781,38 +781,59 @@ export class ChannelStartupService {
     `;
 
     if (results && isArray(results) && results.length > 0) {
-      const mappedResults = results.map((contact) => {
-        const lastMessage = contact.lastMessageId
-          ? {
-              id: contact.lastMessageId,
-              key: contact.lastMessage_key,
-              pushName: contact.lastMessagePushName,
-              participant: contact.lastMessageParticipant,
-              messageType: contact.lastMessageMessageType,
-              message: contact.lastMessageMessage,
-              contextInfo: contact.lastMessageContextInfo,
-              source: contact.lastMessageSource,
-              messageTimestamp: contact.lastMessageMessageTimestamp,
-              instanceId: contact.lastMessageInstanceId,
-              sessionId: contact.lastMessageSessionId,
-              status: contact.lastMessageStatus,
-            }
-          : undefined;
+      const mappedResults = results
+        .map((contact) => {
+          // Filtrar números inválidos: números muito longos que não são grupos ou LID
+          const remoteJidStr = contact.remoteJid as string;
+          if (remoteJidStr) {
+            // Se não for grupo ou LID, validar formato de número
+            if (!remoteJidStr.includes('@g.us') && !remoteJidStr.includes('@lid')) {
+              // Deve terminar com @s.whatsapp.net para ser um número válido
+              if (!remoteJidStr.endsWith('@s.whatsapp.net')) {
+                return null; // Filtrar formatos inválidos
+              }
 
-        return {
-          id: contact.contactId || null,
-          remoteJid: contact.remoteJid,
-          pushName: contact.pushName,
-          profilePicUrl: contact.profilePicUrl,
-          updatedAt: contact.updatedAt,
-          windowStart: contact.windowStart,
-          windowExpires: contact.windowExpires,
-          windowActive: contact.windowActive,
-          lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
-          unreadCount: contact.unreadMessages,
-          isSaved: !!contact.contactId,
-        };
-      });
+              const numberPart = remoteJidStr.split('@')[0];
+              // Números válidos do WhatsApp têm entre 10-13 dígitos
+              // Números com 14+ dígitos são provavelmente inválidos (IDs internos, etc)
+              if (!numberPart || !/^\d+$/.test(numberPart) || numberPart.length < 10 || numberPart.length > 13) {
+                return null; // Filtrar números inválidos
+              }
+            }
+          }
+
+          const lastMessage = contact.lastMessageId
+            ? {
+                id: contact.lastMessageId,
+                key: contact.lastMessage_key,
+                pushName: contact.lastMessagePushName,
+                participant: contact.lastMessageParticipant,
+                messageType: contact.lastMessageMessageType,
+                message: contact.lastMessageMessage,
+                contextInfo: contact.lastMessageContextInfo,
+                source: contact.lastMessageSource,
+                messageTimestamp: contact.lastMessageMessageTimestamp,
+                instanceId: contact.lastMessageInstanceId,
+                sessionId: contact.lastMessageSessionId,
+                status: contact.lastMessageStatus,
+              }
+            : undefined;
+
+          return {
+            id: contact.contactId || null,
+            remoteJid: contact.remoteJid,
+            pushName: contact.pushName,
+            profilePicUrl: contact.profilePicUrl,
+            updatedAt: contact.updatedAt,
+            windowStart: contact.windowStart,
+            windowExpires: contact.windowExpires,
+            windowActive: contact.windowActive,
+            lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
+            unreadCount: contact.unreadMessages,
+            isSaved: !!contact.contactId,
+          };
+        })
+        .filter((contact) => contact !== null); // Remover resultados nulos
 
       return mappedResults;
     }

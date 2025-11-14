@@ -15,7 +15,7 @@ import { ChannelStartupService } from '@api/services/channel.service';
 import { Events, wa } from '@api/types/wa.types';
 import { AudioConverter, Chatwoot, ConfigService, Openai, S3 } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException } from '@exceptions';
-import { createJid } from '@utils/createJid';
+import { createJid, isValidRemoteJid } from '@utils/createJid';
 import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 import { isBase64, isURL } from 'class-validator';
@@ -213,6 +213,12 @@ export class EvolutionStartupService extends ChannelStartupService {
   }
 
   private async updateContact(data: { remoteJid: string; pushName?: string; profilePicUrl?: string }) {
+    // Validar remoteJid antes de salvar
+    if (!isValidRemoteJid(data.remoteJid)) {
+      this.logger.warn(`Invalid remoteJid skipped: ${data.remoteJid}`);
+      return;
+    }
+
     const contactRaw: any = {
       remoteJid: data.remoteJid,
       pushName: data?.pushName,
