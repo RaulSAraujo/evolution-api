@@ -20,6 +20,7 @@ import ChatwootClient, {
 } from '@figuro/chatwoot-sdk';
 import { request as chatwootRequest } from '@figuro/chatwoot-sdk/dist/core/request';
 import { Chatwoot as ChatwootModel, Contact as ContactModel, Message as MessageModel } from '@prisma/client';
+import { isValidRemoteJid } from '@utils/createJid';
 import i18next from '@utils/i18n';
 import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
@@ -306,6 +307,24 @@ export class ChatwootService {
         return null;
       }
 
+      // Validar número de telefone antes de criar contato (evita números inválidos)
+      if (!isGroup) {
+        // Remover caracteres não numéricos para validação
+        const cleanNumber = phoneNumber.replace(/\D/g, '');
+        if (cleanNumber.length < 10 || cleanNumber.length > 13) {
+          this.logger.warn(
+            `Invalid phone number ignored in createContact: ${phoneNumber} (${cleanNumber.length} digits)`,
+          );
+          return null;
+        }
+
+        // Validar jid se fornecido
+        if (jid && !isValidRemoteJid(jid)) {
+          this.logger.warn(`Invalid jid ignored in createContact: ${jid}`);
+          return null;
+        }
+      }
+
       let data: any = {};
       if (!isGroup) {
         data = {
@@ -362,6 +381,25 @@ export class ChatwootService {
     if (!id) {
       this.logger.warn('id is required');
       return null;
+    }
+
+    // Validar phone_number se fornecido (evita números inválidos)
+    if (data.phone_number) {
+      const cleanNumber = data.phone_number.replace(/\D/g, '');
+      if (cleanNumber.length < 10 || cleanNumber.length > 13) {
+        this.logger.warn(
+          `Invalid phone_number ignored in updateContact: ${data.phone_number} (${cleanNumber.length} digits)`,
+        );
+        return null;
+      }
+    }
+
+    // Validar identifier se fornecido (evita números inválidos)
+    if (data.identifier && !data.identifier.includes('@g.us') && !data.identifier.includes('@lid')) {
+      if (!isValidRemoteJid(data.identifier)) {
+        this.logger.warn(`Invalid identifier ignored in updateContact: ${data.identifier}`);
+        return null;
+      }
     }
 
     try {
@@ -579,6 +617,14 @@ export class ChatwootService {
     const maxWaitTime = 5000; // 5 seconds
     const client = await this.clientCw(instance);
     if (!client) return null;
+
+    // Validar remoteJid antes de processar (evita números inválidos)
+    if (!isGroup && remoteJid && !remoteJid.includes('@lid')) {
+      if (!isValidRemoteJid(remoteJid)) {
+        this.logger.warn(`Invalid remoteJid ignored in createConversation: ${remoteJid}`);
+        return null;
+      }
+    }
 
     try {
       // Processa atualização de contatos já criados @lid
@@ -1942,6 +1988,14 @@ export class ChatwootService {
         this.logger.info(`[${event}] New message received - Instance: ${JSON.stringify(body, null, 2)}`);
         if (body.key.remoteJid === 'status@broadcast') {
           return;
+        }
+
+        // Validar remoteJid antes de processar (evita números inválidos)
+        if (body.key?.remoteJid && !body.key.remoteJid.endsWith('@g.us') && !body.key.remoteJid.includes('@lid')) {
+          if (!isValidRemoteJid(body.key.remoteJid)) {
+            this.logger.warn(`Invalid remoteJid ignored in webhook: ${body.key.remoteJid}`);
+            return;
+          }
         }
 
         if (body.message?.ephemeralMessage?.message) {

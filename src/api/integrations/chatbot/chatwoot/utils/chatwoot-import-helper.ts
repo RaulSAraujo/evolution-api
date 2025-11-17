@@ -6,6 +6,7 @@ import { Chatwoot, configService } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import { inbox } from '@figuro/chatwoot-sdk';
 import { Chatwoot as ChatwootModel, Contact, Message } from '@prisma/client';
+import { isValidRemoteJid } from '@utils/createJid';
 import { proto } from 'baileys';
 
 type ChatwootUser = {
@@ -392,7 +393,20 @@ class ChatwootImport {
     const pgClient = postgresClient.getChatwootConnection();
 
     const bindValues = [provider.accountId, inbox.id];
-    const phoneNumberBind = Array.from(messagesByPhoneNumber.keys())
+    // Filtrar números inválidos antes de processar
+    const validPhoneNumbers = Array.from(messagesByPhoneNumber.keys()).filter((phoneNumber) => {
+      // Remover o '+' e validar tamanho (10-13 dígitos)
+      const numberWithoutPlus = phoneNumber.replace('+', '');
+      if (numberWithoutPlus.length < 10 || numberWithoutPlus.length > 13) {
+        this.logger.warn(
+          `Invalid phone number filtered in selectOrCreateFksFromChatwoot: ${phoneNumber} (${numberWithoutPlus.length} digits)`,
+        );
+        return false;
+      }
+      return true;
+    });
+
+    const phoneNumberBind = validPhoneNumbers
       .map((phoneNumber) => {
         const phoneNumberTimestamp = phoneNumbersWithTimestamp.get(phoneNumber);
 
@@ -407,6 +421,7 @@ class ChatwootImport {
           return `${bindStr}$${bindValues.length})`;
         }
       })
+      .filter((bind) => bind) // Remover undefined
       .join(',');
 
     // select (or insert when necessary) data from tables contacts, contact_inboxes, conversations from chatwoot db
@@ -494,13 +509,21 @@ class ChatwootImport {
       const key = message?.key as {
         remoteJid: string;
       };
+      // Validar remoteJid antes de processar
       if (!this.isIgnorePhoneNumber(key?.remoteJid)) {
         const phoneNumber = key?.remoteJid?.split('@')[0];
         if (phoneNumber) {
-          const phoneNumberPlus = `+${phoneNumber}`;
-          const messages = acc.has(phoneNumberPlus) ? acc.get(phoneNumberPlus) : [];
-          messages.push(message);
-          acc.set(phoneNumberPlus, messages);
+          // Validar tamanho do número (10-13 dígitos)
+          if (phoneNumber.length >= 10 && phoneNumber.length <= 13) {
+            const phoneNumberPlus = `+${phoneNumber}`;
+            const messages = acc.has(phoneNumberPlus) ? acc.get(phoneNumberPlus) : [];
+            messages.push(message);
+            acc.set(phoneNumberPlus, messages);
+          } else {
+            this.logger.warn(
+              `Invalid phone number length ignored: ${phoneNumber} (${phoneNumber.length} digits) from remoteJid: ${key?.remoteJid}`,
+            );
+          }
         }
       }
 
@@ -600,7 +623,19 @@ class ChatwootImport {
   }
 
   public isIgnorePhoneNumber(remoteJid: string) {
-    return this.isGroup(remoteJid) || remoteJid === 'status@broadcast' || remoteJid === '0@s.whatsapp.net';
+    if (!remoteJid) {
+      return true;
+    }
+    // Ignorar grupos, status@broadcast e números inválidos
+    if (this.isGroup(remoteJid) || remoteJid === 'status@broadcast' || remoteJid === '0@s.whatsapp.net') {
+      return true;
+    }
+    // Validar se o remoteJid é válido (10-13 dígitos)
+    if (!isValidRemoteJid(remoteJid)) {
+      this.logger.warn(`Invalid remoteJid ignored in import: ${remoteJid}`);
+      return true;
+    }
+    return false;
   }
 
   public updateMessageSourceID(messageId: string | number, sourceId: string) {
